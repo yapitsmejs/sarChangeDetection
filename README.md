@@ -11,7 +11,7 @@ This project is [uv](https://docs.astral.sh/uv/)-managed.
 uv sync
 ```
 
-This creates `.venv/`, installs the package (editable) plus `numpy` and `numba`, and makes `sarChangeDetection` importable.
+This creates `.venv/`, installs the package (editable) plus its runtime dependencies (`numpy`, `numba`, `scipy`) and the dev dependency `matplotlib` (for plotting during development), and makes `sarChangeDetection` importable.
 
 ### As a dependency from git
 
@@ -21,7 +21,7 @@ pip install git+https://github.com/yapitsmejs/sarChangeDetection.git
 uv add "sar-change-detection @ git+https://github.com/yapitsmejs/sarChangeDetection.git"
 ```
 
-This installs `numpy` and `numba` (the only declared runtime dependencies). The package then runs on its **NumPy fallback** by default.
+This installs `numpy`, `numba`, and `scipy` (the declared runtime dependencies). The package then runs on its **NumPy/SciPy fallback** by default.
 
 ## Optional: GPU acceleration with CuPy
 
@@ -54,3 +54,25 @@ uv run python scripts/install_cupy.py
 ```
 
 (That script is not shipped in the wheel and is therefore unavailable to git-installed consumers — use the manual `pip install` steps above.)
+
+## Usage
+
+### Novák multi-polarization GLRT — `getTestStatistics`
+
+Per-pixel generalized likelihood ratio test statistic for equality of the two local (windowed) polarimetric covariance matrices of a co-registered image pair (Conradsen et al. 2003 / Novák formulation).
+
+```python
+import numpy as np
+from sarChangeDetection.novakMultiChannelCD import getTestStatistics
+
+# img1, img2: co-registered (H, W, C) channel-last SAR images, same shape.
+# Real or complex; NumPy or CuPy arrays.
+stat = getTestStatistics(img1, img2, kernel_size=(3, 3))
+# stat: (H, W) float64. Q in [0, 1]: Q = 1 => no change, Q -> 0 => strong change.
+# Border pixels whose window does not fully overlap the image are NaN.
+```
+
+- **Channel-last** `(H, W, C)`; both images must share the same shape.
+- **Odd positive kernel** `(kh, kw)` (enforced); looks `n = kh*kw`, needs `kh*kw >= C` for a non-singular covariance.
+- **GPU auto-acceleration**: when a CUDA device is present, NumPy inputs are moved to the GPU and returned as a NumPy array (numpy in → numpy out); CuPy inputs stay on the GPU. CPU-only hosts use the NumPy/SciPy path. Enable the GPU via the CuPy section above.
+- **Numerics**: inputs are promoted to float64 / complex128 before the covariance determinants. Float32 overflows for multi-channel large-amplitude SAR (`det ~ amp**(2C)`, then squared → `inf/inf = NaN`), so without this promotion multi-channel float32 data returns all-NaN while single-channel works.

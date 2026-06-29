@@ -76,3 +76,29 @@ stat = getTestStatistics(img1, img2, kernel_size=(3, 3))
 - **Odd positive kernel** `(kh, kw)` (enforced); looks `n = kh*kw`, needs `kh*kw >= C` for a non-singular covariance.
 - **GPU auto-acceleration**: when a CUDA device is present, NumPy inputs are moved to the GPU and returned as a NumPy array (numpy in → numpy out); CuPy inputs stay on the GPU. CPU-only hosts use the NumPy/SciPy path. Enable the GPU via the CuPy section above.
 - **Numerics**: inputs are promoted to float64 / complex128 before the covariance determinants. Float32 overflows for multi-channel large-amplitude SAR (`det ~ amp**(2C)`, then squared → `inf/inf = NaN`), so without this promotion multi-channel float32 data returns all-NaN while single-channel works.
+
+### Novák GLRT on two sample populations — `getSingleTestStatistic`
+
+The same Conradsen/Novák statistic as above, but evaluated **once** over two explicit sample populations rather than per-window over an image. Given two `(n, C)` sample matrices, it forms each population's C×C sample covariance and returns the scalar Q.
+
+```python
+import numpy as np
+from sarChangeDetection.novakMultiChannelCD import getSingleTestStatistic
+
+# x1, x2: (n1, C) and (n2, C) multi-channel samples (looks × channels).
+# n1 and n2 need not be equal. NumPy arrays; real or complex.
+q = getSingleTestStatistic(x1, x2)
+# q: numpy.float32 scalar. Q in [0, 1]: Q = 1 => no change, Q -> 0 => strong change.
+```
+
+- **Not the per-pixel map**: this is the population form of the statistic (no windowing, no NaN border). It is NumPy-only — no CuPy/GPU dispatch.
+- **Unequal looks supported**: `n1 != n2` is fine; the pooled covariance is the looks-weighted average `(n1*C1 + n2*C2)/(n1+n2)`.
+- **Same numerics** as `getTestStatistics` (float64/complex128 promotion before determinants; only the final scalar is cast to float32) and the same Hermitian covariance (`conj` is a no-op for real inputs). Needs `n >= C` per population for a non-singular covariance.
+
+## Verification
+
+```powershell
+uv run python -m sarChangeDetection.novakMultiChannelCD.getTestStatistics
+```
+
+Runs two self-checks: the CuPy-vs-NumPy `getTestStatistics` equivalence (skipped with `no GPU` on CPU-only hosts) and the NumPy `getSingleTestStatistic`-vs-`getTestStatistics` single-pixel equivalence (runs on every host). Run this after touching the GLRT code.

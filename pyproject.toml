@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CuPy is NOT a declared dependency. It is installed on demand by
+# scripts/install_cupy.py, which detects the host NVIDIA GPU + CUDA Toolkit and
+# picks the matching wheel at runtime. `uv sync` therefore never installs cupy.
+#
+# Selection logic (mirrors scripts/install_cupy.py):
+#   No NVIDIA GPU        -> install nothing. The base package runs on the NumPy
+#                          fallback (numpy + numba only).
+#   GPU + CUDA Toolkit   -> cupy-cuda{MAJOR}x        (uses the system CUDA
+#                          Toolkit, no bundled libs). {MAJOR} from `nvcc --version`.
+#   GPU, no CUDA Toolkit -> cupy-cuda{MAJOR}x[ctk]   (bundles CUDA libs via PyPI).
+#                          {MAJOR} inferred from `nvidia-smi`'s max supported CUDA
+#                          version; defaults to 12 when undetectable.
+#
+# Supported CUDA majors: 11 -> cupy-cuda11x, 12 -> cupy-cuda12x, 13 -> cupy-cuda13x.
+# Only one cupy dist may be installed at a time; the script scrubs all of
+# [cupy, cupy-cuda11x, cupy-cuda12x, cupy-cuda13x] before installing the chosen one.
+#
+# Install with:  uv run python scripts/install_cupy.py
+# ─────────────────────────────────────────────────────────────────────────────
+
+[project]
+name = "sar-change-detection"
+version = "0.1.0"
+description = "Contains various change detectors for SAR imagery"
+readme = "README.md"
+requires-python = ">=3.10,<3.15"
+dependencies = [
+    "numpy",
+    "numba",
+    "scipy>=1.15.3",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sarChangeDetection"]

@@ -219,6 +219,104 @@ def getTestStatistics(img1, img2, kernel_size=(3, 3)):
     return out
 
 
+def getSingleTestStatistic(x1, x2):
+    """Single GLRT test statistic between two sets of C-channel samples.
+
+    Computes the same Conradsen/Novák generalized likelihood ratio statistic as
+    ``getTestStatistics``, but once over two explicit sample populations
+    (rather than per-window over an image): given the two (n, C) sample
+    matrices it forms each population's C×C sample covariance and evaluates
+
+        Q = det(C1) * det(C2) / det(Cpooled)**2,
+        Cpooled = (n1*C1 + n2*C2) / (n1 + n2)
+
+    NumPy-only path (no CuPy/GPU dispatch).
+
+    Parameters
+    ----------
+    x1, x2 : array-like, shape (n1, C) and (n2, C)
+        Two sets of multi-channel (multi-polarization) samples, where ``n`` is
+        the number of samples (looks) and ``C`` the number of polarization
+        channels (channel-last over the trailing axis). Complex-valued
+        (polarimetric scattering coefficients) or real. Both arrays must have
+        the same number of channels (``x1.shape[1] == x2.shape[1]``).
+
+    Returns
+    -------
+    stat : numpy.float32
+        The GLRT test statistic Q (raw Conradsen-style ratio) as a single
+        float32 scalar. Smaller values indicate stronger evidence of change
+        (Q = 1 => no change; Q -> 0 => strong change). Q is nominally in
+        [0, 1] but may slightly exceed 1 due to floating error; it is not
+        clamped, matching the reference.
+
+    Notes
+    -----
+    Inputs are promoted to float64 (real) / complex128 (complex) before the
+    covariance determinants are computed, regardless of the input dtype, for
+    the same overflow reason as ``getTestStatistics`` (det(C) ~ amp**(2C) then
+    squared overflows float32 for multi-channel data). Only the final scalar
+    is cast to float32. The Hermitian sample covariance is (1/n) * X^H X;
+    ``conj`` is a no-op for real arrays, so real-amplitude samples work
+    unchanged. Needs ``n >= C`` per population for a non-singular covariance;
+    otherwise det = 0 and the statistic degenerates to NaN/inf (documented,
+    not hard-failed).
+    """
+    if x1.ndim != 2 or x2.ndim != 2:
+        raise ValueError("expected (n, C) 2-D arrays")
+    if x1.shape[1] != x2.shape[1]:
+        raise ValueError("x1 and x2 must have the same number of channels")
+    n1, n2 = x1.shape[0], x2.shape[0]
+    a1, a2 = _promote(x1, np), _promote(x2, np)
+    # Hermitian sample covariance: C = (1/n) * X^H X. conj is a no-op for real
+    # arrays => real-amplitude samples work unchanged (same as the image path).
+    cov1 = (a1.conj().T @ a1) / n1   # (C, C)
+    cov2 = (a2.conj().T @ a2) / n2
+    q = _glrt_statistic(cov1, cov2, n1, n2, np)   # scalar; complex, imag ~ 0
+    return np.float32(np.real(q))
+
+
+def _getSingleTestStatistic_selfcheck():
+    """Equivalence check: getSingleTestStatistic vs a single pixel of
+    getTestStatistics.
+
+    With a kernel_size of (H, W) the kernel-based map has exactly one valid
+    output pixel (at ((kh-1)//2, (kw-1)//2)); reshaping that image to (-1, C)
+    yields the same window samples getSingleTestStatistic consumes, so the two
+    must agree up to the float32 cast getSingleTestStatistic applies. NumPy
+    only -> runs on every host (never skipped, unlike the cupy self-check).
+    """
+    rng = np.random.default_rng(0)
+    H, W, C = 3, 3, 3
+    a = rng.standard_normal((H, W, C)) + 1j * rng.standard_normal((H, W, C))
+    b = rng.standard_normal((H, W, C)) + 1j * rng.standard_normal((H, W, C))
+    kernel_size = (H, W)            # kh == H, kw == W => exactly one valid pixel
+    kh, kw = kernel_size
+    off_h, off_w = (kh - 1) // 2, (kw - 1) // 2
+
+    # Reference: the kernel-based map (float64), single valid pixel.
+    ref = getTestStatistics(a, b, kernel_size=kernel_size)
+    ref_val = float(ref[off_h, off_w])
+
+    # Got: the population statistic from the same window's samples (float32).
+    x1 = a.reshape(-1, C)
+    x2 = b.reshape(-1, C)
+    got = getSingleTestStatistic(x1, x2)
+    got_val = float(got)
+
+    dtype_ok = got.dtype == np.float32
+    ref_finite = np.isfinite(ref_val)
+    match = bool(np.isclose(got_val, ref_val, rtol=1e-5, atol=1e-6))
+
+    ok = bool(dtype_ok and ref_finite and match)
+    print(f"getSingleTestStatistic self-check: {'PASS' if ok else 'FAIL'} "
+          f"(dtype={dtype_ok}, ref_finite={ref_finite}, match={match}, "
+          f"ref={ref_val:.6e}, got={got_val:.6e})")
+    if not ok:
+        print("ref dtype", ref.dtype, "got dtype", got.dtype)
+    return ok
+
+
 def _getTestStatistics_selfcheck():
     """Equivalence check: cupy getTestStatistics vs the NumPy reference.
 
@@ -266,3 +364,4 @@ def _getTestStatistics_selfcheck():
 
 if __name__ == "__main__":
     _getTestStatistics_selfcheck()
+    _getSingleTestStatistic_selfcheck()
